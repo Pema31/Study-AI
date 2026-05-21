@@ -1,35 +1,156 @@
 import 'package:flutter/material.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
-import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'login_screen.dart';
-import 'history_screen.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
+class HistoryScreen extends StatelessWidget {
+  const HistoryScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final user = FirebaseAuth.instance.currentUser;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("Histórico"),
+      ),
+      body: StreamBuilder<QuerySnapshot>(
+        stream: FirebaseFirestore.instance
+            .collection("usuarios")
+            .doc(user?.uid)
+            .collection("conversas")
+            .orderBy("data", descending: true)
+            .snapshots(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator(color: Colors.deepPurple));
+          }
+
+          if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+            return const Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.history, size: 60, color: Colors.grey),
+                  SizedBox(height: 12),
+                  Text("Nenhuma conversa salva ainda.", style: TextStyle(color: Colors.grey)),
+                ],
+              ),
+            );
+          }
+
+          final conversas = snapshot.data!.docs;
+
+          return ListView.separated(
+            padding: const EdgeInsets.all(16),
+            itemCount: conversas.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              final doc = conversas[index];
+              final data = doc.data() as Map<String, dynamic>;
+              final titulo = data["titulo"] ?? "Sem título";
+              final timestamp = data["data"] as Timestamp?;
+              final dataFormatada = timestamp != null
+                  ? _formatarData(timestamp.toDate())
+                  : "";
+
+              final mensagens = data["mensagens"] as List<dynamic>?;
+              final totalMensagens = mensagens != null
+                  ? "${mensagens.length} mensagens"
+                  : "conversa antiga";
+
+              return Card(
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: ListTile(
+                  leading: const Icon(Icons.notes, color: Colors.deepPurple),
+                  title: Text(
+                    titulo,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  subtitle: Text(
+                    "$dataFormatada · $totalMensagens",
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ConversaScreen(
+                        data: data,
+                        conversaId: doc.id,
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  String _formatarData(DateTime date) {
+    return "${date.day.toString().padLeft(2, '0')}/${date.month.toString().padLeft(2, '0')}/${date.year} ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}";
+  }
+}
+
+// Modelo local de mensagem
 class Mensagem {
   final String texto;
   final bool isUsuario;
-
   Mensagem({required this.texto, required this.isUsuario});
 }
 
-class Home extends StatefulWidget {
-  const Home({super.key});
+class ConversaScreen extends StatefulWidget {
+  final Map<String, dynamic> data;
+  final String conversaId;
+
+  const ConversaScreen({super.key, required this.data, required this.conversaId});
 
   @override
-  State<Home> createState() => _HomeState();
+  State<ConversaScreen> createState() => _ConversaScreenState();
 }
 
-class _HomeState extends State<Home> {
+class _ConversaScreenState extends State<ConversaScreen> {
   final TextEditingController controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  final List<Mensagem> mensagens = [];
+  late List<Mensagem> mensagens;
   bool isLoading = false;
-  String? _conversaId;
 
   static const String _apiKey = "";
   static const String _model = "gemini-2.5-flash";
+
+  @override
+  void initState() {
+    super.initState();
+    mensagens = _carregarMensagens();
+  }
+
+  // Carrega mensagens do formato novo ou antigo
+  List<Mensagem> _carregarMensagens() {
+    final msgs = widget.data["mensagens"] as List<dynamic>?;
+
+    if (msgs != null) {
+      // Formato novo
+      return msgs.map((m) {
+        final msg = m as Map<String, dynamic>;
+        return Mensagem(texto: msg["texto"], isUsuario: msg["isUsuario"]);
+      }).toList();
+    } else {
+      // Formato antigo: converte para o novo
+      final anotacoes = widget.data["anotacoes"] as String? ?? "";
+      final resposta = widget.data["resposta"] as String? ?? "";
+      return [
+        Mensagem(texto: anotacoes, isUsuario: true),
+        Mensagem(texto: resposta, isUsuario: false),
+      ];
+    }
+  }
 
   Future<void> enviarMensagem() async {
     final textoUsuario = controller.text.trim();
@@ -43,12 +164,8 @@ class _HomeState extends State<Home> {
     controller.clear();
     _scrollToBottom();
 
-    // Monta histórico da conversa para contexto da IA
     final historico = mensagens
-        .where((m) => !isLoading || m != mensagens.last)
-        .map((m) => m.isUsuario
-            ? "Aluno: ${m.texto}"
-            : "Tutora: ${m.texto}")
+        .map((m) => m.isUsuario ? "Aluno: ${m.texto}" : "Tutora: ${m.texto}")
         .join("\n\n");
 
     try {
@@ -66,23 +183,6 @@ class _HomeState extends State<Home> {
                 {
                   "text": """
 Você é uma tutora de estudos especializada em transformar anotações de alunos em material didático de alta qualidade. Você está em uma conversa contínua com o aluno.
-
-Se for a primeira mensagem, analise as anotações e gere:
-
-📌 PONTOS-CHAVE
-Identifique os conceitos centrais e explique cada um de forma simples e direta.
-
-📝 RESUMO DIDÁTICO
-Reorganize e complemente as anotações em um texto coeso e fácil de entender. NÃO copie as anotações, reescreva com suas próprias palavras.
-
-💡 COMPLEMENTO
-Adicione informações relevantes que o aluno pode não ter anotado. Traga exemplos práticos e analogias quando possível.
-
-🗒️ TERMOS IMPORTANTES
-Liste os termos técnicos com uma explicação simples de cada um.
-
-❓ POSSÍVEIS DÚVIDAS
-Antecipe 2 a 3 perguntas e responda cada uma de forma objetiva.
 
 Se for uma mensagem de acompanhamento, responda de forma direta e didática, mantendo o contexto da conversa anterior.
 
@@ -137,42 +237,18 @@ $textoUsuario
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
 
-    final titulo = mensagens.first.texto.length > 50
-        ? "${mensagens.first.texto.substring(0, 50)}..."
-        : mensagens.first.texto;
-
     final mensagensJson = mensagens
         .map((m) => {"texto": m.texto, "isUsuario": m.isUsuario})
         .toList();
 
-    if (_conversaId == null) {
-      final doc = await FirebaseFirestore.instance
-          .collection("usuarios")
-          .doc(user.uid)
-          .collection("conversas")
-          .add({
-        "titulo": titulo,
-        "mensagens": mensagensJson,
-        "data": FieldValue.serverTimestamp(),
-      });
-      _conversaId = doc.id;
-    } else {
-      await FirebaseFirestore.instance
-          .collection("usuarios")
-          .doc(user.uid)
-          .collection("conversas")
-          .doc(_conversaId)
-          .update({
-        "mensagens": mensagensJson,
-        "data": FieldValue.serverTimestamp(),
-      });
-    }
-  }
-
-  void _novaConversa() {
-    setState(() {
-      mensagens.clear();
-      _conversaId = null;
+    await FirebaseFirestore.instance
+        .collection("usuarios")
+        .doc(user.uid)
+        .collection("conversas")
+        .doc(widget.conversaId)
+        .update({
+      "mensagens": mensagensJson,
+      "data": FieldValue.serverTimestamp(),
     });
   }
 
@@ -188,94 +264,37 @@ $textoUsuario
     });
   }
 
-  Future<void> _logout() async {
-    await FirebaseAuth.instance.signOut();
-    if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const LoginScreen()),
-      );
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Study AI"),
-        actions: [
-          if (mensagens.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.add_comment_outlined),
-              tooltip: "Nova conversa",
-              onPressed: _novaConversa,
-            ),
-          IconButton(
-            icon: const Icon(Icons.history),
-            tooltip: "Histórico",
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const HistoryScreen()),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            tooltip: "Sair",
-            onPressed: _logout,
-          ),
-        ],
+        title: const Text("Conversa"),
       ),
       resizeToAvoidBottomInset: true,
       body: SafeArea(
         child: Column(
           children: [
-            // Área do chat
             Expanded(
-              child: mensagens.isEmpty && !isLoading
-                  ? Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.auto_awesome, color: Colors.deepPurple, size: 60),
-                        const SizedBox(height: 10),
-                        Text(
-                          "Olá, ${user?.email?.split('@')[0] ?? 'aluno'}! 👋",
-                          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          "Cole suas anotações abaixo\ne a IA vai transformá-las em material de estudo.",
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.grey),
-                        ),
-                      ],
-                    )
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.all(12),
-                      itemCount: mensagens.length + (isLoading ? 1 : 0),
-                      itemBuilder: (context, index) {
-                        if (index == mensagens.length) {
-                          return const Padding(
-                            padding: EdgeInsets.symmetric(vertical: 8),
-                            child: Row(
-                              children: [
-                                CircularProgressIndicator(
-                                  color: Colors.deepPurple,
-                                  strokeWidth: 2,
-                                ),
-                                SizedBox(width: 12),
-                                Text("Analisando suas anotações..."),
-                              ],
-                            ),
-                          );
-                        }
-
-                        final mensagem = mensagens[index];
-                        return _buildBolha(mensagem);
-                      },
-                    ),
+              child: ListView.builder(
+                controller: _scrollController,
+                padding: const EdgeInsets.all(12),
+                itemCount: mensagens.length + (isLoading ? 1 : 0),
+                itemBuilder: (context, index) {
+                  if (index == mensagens.length) {
+                    return const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Row(
+                        children: [
+                          CircularProgressIndicator(color: Colors.deepPurple, strokeWidth: 2),
+                          SizedBox(width: 12),
+                          Text("Analisando..."),
+                        ],
+                      ),
+                    );
+                  }
+                  return _buildBolha(mensagens[index]);
+                },
+              ),
             ),
 
             // Barra de input
@@ -296,7 +315,7 @@ $textoUsuario
                         controller: controller,
                         maxLines: null,
                         decoration: const InputDecoration(
-                          hintText: "Cole suas anotações ou faça uma pergunta...",
+                          hintText: "Continue a conversa...",
                           border: InputBorder.none,
                           contentPadding: EdgeInsets.symmetric(vertical: 12),
                         ),
@@ -331,15 +350,12 @@ $textoUsuario
 
   Widget _buildBolha(Mensagem mensagem) {
     final isUsuario = mensagem.isUsuario;
-
     return Align(
       alignment: isUsuario ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.all(12),
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.85,
-        ),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.85),
         decoration: BoxDecoration(
           color: isUsuario ? Colors.deepPurple : Colors.grey[100],
           borderRadius: BorderRadius.only(
@@ -350,10 +366,7 @@ $textoUsuario
           ),
         ),
         child: isUsuario
-            ? Text(
-                mensagem.texto,
-                style: const TextStyle(color: Colors.white, fontSize: 14),
-              )
+            ? Text(mensagem.texto, style: const TextStyle(color: Colors.white, fontSize: 14))
             : MarkdownBody(
                 data: mensagem.texto,
                 softLineBreak: true,
