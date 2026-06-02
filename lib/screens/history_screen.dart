@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -8,13 +9,52 @@ import 'package:http/http.dart' as http;
 class HistoryScreen extends StatelessWidget {
   const HistoryScreen({super.key});
 
+  Future<void> _deletarConversa(BuildContext context, String uid, String docId) async {
+    final confirmar = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text("Excluir conversa"),
+        content: const Text("Tem certeza que deseja excluir esta conversa? Esta ação não pode ser desfeita."),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("Cancelar"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text("Excluir"),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmar == true) {
+      await FirebaseFirestore.instance
+          .collection("usuarios")
+          .doc(uid)
+          .collection("conversas")
+          .doc(docId)
+          .delete();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
-        title: const Text("Histórico"),
+        backgroundColor: const Color(0xFF4A148C),
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: const Text("Histórico", style: TextStyle(fontWeight: FontWeight.bold)),
       ),
       body: StreamBuilder<QuerySnapshot>(
         stream: FirebaseFirestore.instance
@@ -25,7 +65,7 @@ class HistoryScreen extends StatelessWidget {
             .snapshots(),
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator(color: Colors.deepPurple));
+            return const Center(child: CircularProgressIndicator(color: Color(0xFF4A148C)));
           }
 
           if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
@@ -52,37 +92,78 @@ class HistoryScreen extends StatelessWidget {
               final data = doc.data() as Map<String, dynamic>;
               final titulo = data["titulo"] ?? "Sem título";
               final timestamp = data["data"] as Timestamp?;
-              final dataFormatada = timestamp != null
-                  ? _formatarData(timestamp.toDate())
-                  : "";
-
+              final dataFormatada = timestamp != null ? _formatarData(timestamp.toDate()) : "";
               final mensagens = data["mensagens"] as List<dynamic>?;
-              final totalMensagens = mensagens != null
-                  ? "${mensagens.length} mensagens"
-                  : "conversa antiga";
+              final totalMensagens = mensagens != null ? "${mensagens.length} mensagens" : "conversa antiga";
 
               return Card(
+                elevation: 0,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 child: ListTile(
-                  leading: const Icon(Icons.notes, color: Colors.deepPurple),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF4A148C).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.chat_outlined, color: Color(0xFF4A148C), size: 20),
+                  ),
                   title: Text(
                     titulo,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w500),
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
                   ),
-                  subtitle: Text(
-                    "$dataFormatada · $totalMensagens",
-                    style: const TextStyle(fontSize: 12),
+                  subtitle: Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      "$dataFormatada · $totalMensagens",
+                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                    ),
                   ),
-                  trailing: const Icon(Icons.chevron_right),
+                  trailing: PopupMenuButton(
+                    icon: const Icon(Icons.more_vert, color: Colors.grey),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    itemBuilder: (_) => [
+                      const PopupMenuItem(
+                        value: "abrir",
+                        child: Row(
+                          children: [
+                            Icon(Icons.open_in_new, size: 18, color: Colors.black54),
+                            SizedBox(width: 10),
+                            Text("Abrir"),
+                          ],
+                        ),
+                      ),
+                      const PopupMenuItem(
+                        value: "excluir",
+                        child: Row(
+                          children: [
+                            Icon(Icons.delete_outline, size: 18, color: Colors.red),
+                            SizedBox(width: 10),
+                            Text("Excluir", style: TextStyle(color: Colors.red)),
+                          ],
+                        ),
+                      ),
+                    ],
+                    onSelected: (value) async {
+                      if (value == "abrir") {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => ConversaScreen(data: data, conversaId: doc.id),
+                          ),
+                        );
+                      } else if (value == "excluir") {
+                        await _deletarConversa(context, user!.uid, doc.id);
+                      }
+                    },
+                  ),
                   onTap: () => Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => ConversaScreen(
-                        data: data,
-                        conversaId: doc.id,
-                      ),
+                      builder: (_) => ConversaScreen(data: data, conversaId: doc.id),
                     ),
                   ),
                 ),
@@ -99,7 +180,6 @@ class HistoryScreen extends StatelessWidget {
   }
 }
 
-// Modelo local de mensagem
 class Mensagem {
   final String texto;
   final bool isUsuario;
@@ -109,7 +189,6 @@ class Mensagem {
 class ConversaScreen extends StatefulWidget {
   final Map<String, dynamic> data;
   final String conversaId;
-
   const ConversaScreen({super.key, required this.data, required this.conversaId});
 
   @override
@@ -122,7 +201,7 @@ class _ConversaScreenState extends State<ConversaScreen> {
   late List<Mensagem> mensagens;
   bool isLoading = false;
 
-  static const String _apiKey = "";
+  static const String _apiKey = "SUA_CHAVE_AQUI";
   static const String _model = "gemini-2.5-flash";
 
   @override
@@ -131,18 +210,14 @@ class _ConversaScreenState extends State<ConversaScreen> {
     mensagens = _carregarMensagens();
   }
 
-  // Carrega mensagens do formato novo ou antigo
   List<Mensagem> _carregarMensagens() {
     final msgs = widget.data["mensagens"] as List<dynamic>?;
-
     if (msgs != null) {
-      // Formato novo
       return msgs.map((m) {
         final msg = m as Map<String, dynamic>;
         return Mensagem(texto: msg["texto"], isUsuario: msg["isUsuario"]);
       }).toList();
     } else {
-      // Formato antigo: converte para o novo
       final anotacoes = widget.data["anotacoes"] as String? ?? "";
       final resposta = widget.data["resposta"] as String? ?? "";
       return [
@@ -197,36 +272,25 @@ $textoUsuario
               ]
             }
           ],
-          "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 8192,
-          }
+          "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192}
         }),
       );
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         final texto = data["candidates"][0]["content"]["parts"][0]["text"] as String;
-
-        setState(() {
-          mensagens.add(Mensagem(texto: texto, isUsuario: false));
-        });
-
+        setState(() => mensagens.add(Mensagem(texto: texto, isUsuario: false)));
         _scrollToBottom();
         await _salvarConversa();
       } else {
         final erro = jsonDecode(response.body);
-        setState(() {
-          mensagens.add(Mensagem(
-            texto: "Erro ${response.statusCode}: ${erro["error"]["message"]}",
-            isUsuario: false,
-          ));
-        });
+        setState(() => mensagens.add(Mensagem(
+          texto: "Erro ${response.statusCode}: ${erro["error"]["message"]}",
+          isUsuario: false,
+        )));
       }
     } catch (e) {
-      setState(() {
-        mensagens.add(Mensagem(texto: "Erro de conexão: $e", isUsuario: false));
-      });
+      setState(() => mensagens.add(Mensagem(texto: "Erro de conexão: $e", isUsuario: false)));
     } finally {
       setState(() => isLoading = false);
       _scrollToBottom();
@@ -236,20 +300,10 @@ $textoUsuario
   Future<void> _salvarConversa() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
-
-    final mensagensJson = mensagens
-        .map((m) => {"texto": m.texto, "isUsuario": m.isUsuario})
-        .toList();
-
+    final mensagensJson = mensagens.map((m) => {"texto": m.texto, "isUsuario": m.isUsuario}).toList();
     await FirebaseFirestore.instance
-        .collection("usuarios")
-        .doc(user.uid)
-        .collection("conversas")
-        .doc(widget.conversaId)
-        .update({
-      "mensagens": mensagensJson,
-      "data": FieldValue.serverTimestamp(),
-    });
+        .collection("usuarios").doc(user.uid).collection("conversas").doc(widget.conversaId)
+        .update({"mensagens": mensagensJson, "data": FieldValue.serverTimestamp()});
   }
 
   void _scrollToBottom() {
@@ -267,8 +321,12 @@ $textoUsuario
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
-        title: const Text("Conversa"),
+        backgroundColor: const Color(0xFF4A148C),
+        foregroundColor: Colors.white,
+        elevation: 0,
+        title: const Text("Conversa", style: TextStyle(fontWeight: FontWeight.bold)),
       ),
       resizeToAvoidBottomInset: true,
       body: SafeArea(
@@ -281,13 +339,25 @@ $textoUsuario
                 itemCount: mensagens.length + (isLoading ? 1 : 0),
                 itemBuilder: (context, index) {
                   if (index == mensagens.length) {
-                    return const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 8),
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
                       child: Row(
                         children: [
-                          CircularProgressIndicator(color: Colors.deepPurple, strokeWidth: 2),
-                          SizedBox(width: 12),
-                          Text("Analisando..."),
+                          Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: const Row(
+                              children: [
+                                SizedBox(width: 16, height: 16,
+                                    child: CircularProgressIndicator(color: Color(0xFF4A148C), strokeWidth: 2)),
+                                SizedBox(width: 10),
+                                Text("Analisando...", style: TextStyle(color: Colors.grey, fontSize: 13)),
+                              ],
+                            ),
+                          ),
                         ],
                       ),
                     );
@@ -298,26 +368,40 @@ $textoUsuario
             ),
 
             // Barra de input
-            Padding(
+            Container(
+              color: Colors.white,
               padding: const EdgeInsets.all(12),
               child: Container(
                 constraints: const BoxConstraints(maxHeight: 150),
-                padding: const EdgeInsets.symmetric(horizontal: 10),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
                 decoration: BoxDecoration(
-                  color: Colors.grey[200],
-                  borderRadius: BorderRadius.circular(20),
+                  color: const Color(0xFFF0F0F0),
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: const Color(0xFF4A148C).withOpacity(0.2)),
                 ),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     Expanded(
-                      child: TextField(
-                        controller: controller,
-                        maxLines: null,
-                        decoration: const InputDecoration(
-                          hintText: "Continue a conversa...",
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.symmetric(vertical: 12),
+                      child: KeyboardListener(
+                        focusNode: FocusNode(),
+                        onKeyEvent: (event) {
+                          if (event is KeyDownEvent &&
+                              event.logicalKey == LogicalKeyboardKey.enter &&
+                              !HardwareKeyboard.instance.isShiftPressed &&
+                              !isLoading) {
+                            enviarMensagem();
+                          }
+                        },
+                        child: TextField(
+                          controller: controller,
+                          maxLines: null,
+                          decoration: const InputDecoration(
+                            hintText: "Continue a conversa...",
+                            hintStyle: TextStyle(fontSize: 13),
+                            border: InputBorder.none,
+                            contentPadding: EdgeInsets.symmetric(vertical: 12),
+                          ),
                         ),
                       ),
                     ),
@@ -326,16 +410,10 @@ $textoUsuario
                       child: IconButton(
                         onPressed: isLoading ? null : enviarMensagem,
                         icon: isLoading
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.deepPurple,
-                                ),
-                              )
-                            : const Icon(Icons.send),
-                        color: Colors.deepPurple,
+                            ? const SizedBox(width: 20, height: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF4A148C)))
+                            : const Icon(Icons.send_rounded),
+                        color: const Color(0xFF4A148C),
                       ),
                     ),
                   ],
@@ -355,15 +433,18 @@ $textoUsuario
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
         padding: const EdgeInsets.all(12),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.85),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.82),
         decoration: BoxDecoration(
-          color: isUsuario ? Colors.deepPurple : Colors.grey[100],
+          color: isUsuario ? const Color(0xFF4A148C) : Colors.white,
           borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(16),
-            topRight: const Radius.circular(16),
-            bottomLeft: Radius.circular(isUsuario ? 16 : 4),
-            bottomRight: Radius.circular(isUsuario ? 4 : 16),
+            topLeft: const Radius.circular(18),
+            topRight: const Radius.circular(18),
+            bottomLeft: Radius.circular(isUsuario ? 18 : 4),
+            bottomRight: Radius.circular(isUsuario ? 4 : 18),
           ),
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: const Offset(0, 2)),
+          ],
         ),
         child: isUsuario
             ? Text(mensagem.texto, style: const TextStyle(color: Colors.white, fontSize: 14))
@@ -371,7 +452,8 @@ $textoUsuario
                 data: mensagem.texto,
                 softLineBreak: true,
                 styleSheet: MarkdownStyleSheet(
-                  p: const TextStyle(fontSize: 14, height: 1.5),
+                  p: const TextStyle(fontSize: 14, height: 1.5, color: Colors.black87),
+                  h3: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF4A148C)),
                 ),
               ),
       ),
